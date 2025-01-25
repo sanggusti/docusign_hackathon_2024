@@ -1,4 +1,5 @@
-fasthtml
+python-fasthtml
+python-dotenv
 cohere
 reportlab
 lancedb
