@@ -1,0 +1,4 @@
+fasthtml
+cohere
+reportlab
+lancedb
