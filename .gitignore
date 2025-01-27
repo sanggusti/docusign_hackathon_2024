@@ -11,6 +11,7 @@ pandas_docs
 venv
 *__pycache__*
 *.DS_Store*
+.sesskey
 
 # C extensions
 *.so
@@ -178,3 +179,5 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+private.key

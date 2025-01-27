@@ -7,7 +7,14 @@ from config import COHERE_API_KEY
 
 class HealthcareCohereClient:
     def __init__(self):
-        self.client = cohere.Client(COHERE_API_KEY)
+        if not COHERE_API_KEY:
+            raise ValueError("Cohere API key not found in environment variables")
+        try:
+            self.client = cohere.Client(COHERE_API_KEY)
+            # Verify the key works
+            self.client.tokenize(model="command", text="test")
+        except Exception as e:
+            raise ValueError(f"Failed to initialize Cohere client: {str(e)}")
         self.tools = self._setup_healthcare_tools()
 
     def _setup_healthcare_tools(self) -> List[dict]:
