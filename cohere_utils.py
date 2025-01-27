@@ -20,9 +20,20 @@ class HealthcareCohereClient:
     def generate_document(self, prompt: str, max_steps: int = 3) -> dict:
         """Generate healthcare document using Cohere's generate model"""
         try:
+            structured_prompt = f"""{prompt}
+
+Please structure the response with clear sections:
+1. Patient Information (if applicable)
+2. Medical History (if applicable)
+3. Current Assessment
+4. Diagnosis and Plan
+5. Follow-up Instructions
+
+Format the response as a structured document with clear sections and proper medical terminology."""
+
             response = self.client.generate(
                 model="command-r-plus",
-                prompt=prompt,
+                prompt=structured_prompt,
                 max_tokens=2048,  # Increased for more detailed responses
                 temperature=0.7,   # Slightly increased for more creative responses
                 stop_sequences=["\n\n\n"],  # Stop on triple newline
@@ -33,16 +44,47 @@ class HealthcareCohereClient:
 
             # Extract and clean the generated text
             generated_text = response.generations[0].text.strip()
-            print(f"Received from Cohere: {generated_text}")
-
+            
+            # Format the response for better structure
+            formatted_text = self._format_medical_content(generated_text)
+            
             return {
                 "success": True,
-                "content": generated_text,
+                "content": formatted_text,
                 "raw_text": generated_text
             }
 
         except Exception as e:
-            return self._format_error(f"Unexpected Error: {str(e)}")
+            return self._format_error(f"Document generation failed: {str(e)}")
+
+    def _format_medical_content(self, content: str) -> str:
+        """Format medical content with clear sections"""
+        try:
+            # Split content into sections
+            sections = content.split('\n')
+            formatted_sections = []
+            current_section = ""
+            
+            for line in sections:
+                if line.strip():
+                    if any(header in line.lower() for header in ['patient information', 'medical history', 'assessment', 'diagnosis', 'plan', 'follow-up']):
+                        # New section header
+                        if current_section:
+                            formatted_sections.append(current_section)
+                        current_section = f"\n{line}\n{'=' * len(line)}\n"
+                    else:
+                        # Content line
+                        current_section += f"{line}\n"
+            
+            # Add last section
+            if current_section:
+                formatted_sections.append(current_section)
+                
+            return "\n".join(formatted_sections)
+            
+        except Exception as e:
+            print(f"Content formatting error: {str(e)}")
+            return content
 
     def generate_embeddings(self, texts: Union[str, List[str]]) -> Optional[np.ndarray]:
         """Generate embeddings for medical text"""
@@ -59,6 +101,44 @@ class HealthcareCohereClient:
         except Exception as e:
             print(f"Embedding Error: {str(e)}")
             return None
+
+    def generate_insurance_comparison(self, criteria: str) -> List[Dict]:
+        """Generate insurance comparison data"""
+        try:
+            prompt = f"""Generate a comparison of insurance plans based on these criteria:
+{criteria}
+
+Format the response as a JSON array of objects with these fields:
+- insurance_plan (string): name of the plan
+- monthly_premium (number): monthly cost
+- coverage_level (string): basic, standard, or premium
+- deductible (number): yearly deductible
+- coverage_details (string): brief description of coverage
+"""
+
+            response = self.client.generate(
+                model="command-r-plus",
+                prompt=prompt,
+                temperature=0.7,
+                max_tokens=1000
+            )
+
+            # Parse the response
+            try:
+                content = response.generations[0].text
+                # Extract JSON from the response
+                import re
+                json_match = re.search(r'\[.*\]', content, re.DOTALL)
+                if json_match:
+                    return json.loads(json_match.group())
+                return []
+            except Exception as e:
+                print(f"Error parsing insurance comparison: {str(e)}")
+                return []
+
+        except Exception as e:
+            print(f"Error generating insurance comparison: {str(e)}")
+            return []
 
     def _handle_patient_info(self, raw_text: str) -> dict:
         """Process patient information extraction (mock implementation)"""

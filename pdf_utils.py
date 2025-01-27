@@ -1,4 +1,5 @@
 import io
+import re  # Add missing import
 from typing import Union, Dict
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
@@ -12,56 +13,87 @@ class PDFGenerator:
 
     def _setup_styles(self):
         """Setup custom styles for PDF generation"""
-        # Check if styles already exist before adding
-        if 'CustomTitle' not in self.styles:
-            self.styles.add(
-                ParagraphStyle(
-                    name='CustomTitle',
-                    parent=self.styles['Heading1'],
-                    fontSize=16,
-                    spaceAfter=30,
-                    alignment=TA_CENTER
-                )
+        # Add custom styles
+        self.styles.add(
+            ParagraphStyle(
+                name='CustomTitle',
+                parent=self.styles['Heading1'],
+                fontSize=24,
+                spaceAfter=30,
+                alignment=TA_CENTER,
+                textColor='navy'
             )
-        if 'CustomContent' not in self.styles:
-            self.styles.add(
-                ParagraphStyle(
-                    name='CustomContent',
-                    parent=self.styles['Normal'],
-                    fontSize=12,
-                    spaceAfter=12,
-                    alignment=TA_LEFT
-                )
+        )
+        
+        # Add SectionHeader style
+        self.styles.add(
+            ParagraphStyle(
+                name='SectionHeader',
+                parent=self.styles['Heading2'],
+                fontSize=16,
+                spaceBefore=20,
+                spaceAfter=12,
+                textColor='navy',
+                alignment=TA_LEFT
             )
+        )
+        
+        self.styles.add(
+            ParagraphStyle(
+                name='CustomContent',
+                parent=self.styles['Normal'],
+                fontSize=12,
+                spaceAfter=12,
+                alignment=TA_LEFT,
+                leading=16
+            )
+        )
 
     def generate_pdf(self, content: Union[str, Dict]) -> io.BytesIO:
-        """Generate PDF from content string or dictionary"""
+        """Generate PDF with improved formatting"""
         try:
-            # Create buffer
             buffer = io.BytesIO()
-            doc = SimpleDocTemplate(buffer, pagesize=letter)
+            doc = SimpleDocTemplate(
+                buffer, 
+                pagesize=letter,
+                rightMargin=72,
+                leftMargin=72,
+                topMargin=72,
+                bottomMargin=72
+            )
             elements = []
 
-            # Process title
+            # Process title and content
             if isinstance(content, dict):
-                title = content.get('title', 'Document')
-                if isinstance(content.get('content'), (str, dict)):
-                    body = str(content.get('content'))
-                else:
-                    body = "No content available"
+                title = content.get('title', 'Medical Document')
+                content_text = content.get('content', '')
+                if isinstance(content_text, dict):
+                    content_text = json.dumps(content_text, indent=2)
             else:
-                title = "Document"
-                body = str(content)
+                title = "Medical Document"
+                content_text = str(content)
 
             # Add title
             elements.append(Paragraph(title, self.styles['CustomTitle']))
-            elements.append(Spacer(1, 12))
+            elements.append(Spacer(1, 20))
 
-            # Add content paragraphs
-            for paragraph in body.split('\n'):
-                if paragraph.strip():
-                    elements.append(Paragraph(paragraph, self.styles['CustomContent']))
-                    elements.append(Spacer(1, 12))
+            # Process content sections
+            sections = content_text.split('\n')
+            for section in sections:
+                if section.strip():
+                    # Check if this is a header
+                    if section.startswith('##') or section.startswith('# '):
+                        header_text = section.lstrip('#').strip()
+                        elements.append(Paragraph(header_text, self.styles['SectionHeader']))
+                        elements.append(Spacer(1, 12))
+                    else:
+                        # Handle bullet points and regular text
+                        if section.strip().startswith('-'):
+                            text = '•' + section.strip()[1:]
+                        else:
+                            text = section.strip()
+                        elements.append(Paragraph(text, self.styles['CustomContent']))
+                        elements.append(Spacer(1, 8))
 
             # Build PDF
             doc.build(elements)

@@ -21,7 +21,7 @@ class HealthcareVectorDB:
         """Initialize table with complete schema"""
         schema = pa.schema([
             pa.field("vector", pa.list_(pa.float32(), 1024)),
-            pa.field("document_id", pa.string()),
+            pa.field("document_id", pa.string()),  # Primary ID field
             pa.field("patient_id", pa.string()),
             pa.field("doc_type", pa.string()),
             pa.field("content", pa.string()),
@@ -32,22 +32,18 @@ class HealthcareVectorDB:
         ])
         
         try:
-            # Try to open existing table
             table = self.db.open_table("healthcare_docs")
-            
-            # If schema needs update, create new table with updated schema
             if set(table.schema.names) != set(schema.names):
-                # Backup existing data if needed
                 existing_data = table.to_pandas()
-                
-                # Drop existing table
                 self.db.drop_table("healthcare_docs")
-                
-                # Create new table with updated schema
                 table = self.db.create_table("healthcare_docs", schema=schema)
                 
-                # Migrate existing data if any
                 if not existing_data.empty:
+                    # Map old column names to new ones if needed
+                    if 'doc_id' in existing_data.columns:
+                        existing_data['document_id'] = existing_data['doc_id']
+                        existing_data.drop('doc_id', axis=1, inplace=True)
+                    
                     # Add missing columns with default values
                     for col in schema.names:
                         if col not in existing_data.columns:
@@ -57,14 +53,14 @@ class HealthcareVectorDB:
                                 existing_data[col] = ""
                             elif col == "signature_status":
                                 existing_data[col] = "pending"
+                            elif col == "vector":
+                                # Generate dummy vectors if needed
+                                existing_data[col] = [np.zeros(1024) for _ in range(len(existing_data))]
                     
-                    # Add data back to table
                     table.add(existing_data)
-                
             return table
-            
-        except Exception:
-            # Create new table if doesn't exist
+        except Exception as e:
+            print(f"Table initialization error: {str(e)}")
             return self.db.create_table("healthcare_docs", schema=schema)
 
     def _initialize_insurance_table(self):
@@ -87,35 +83,61 @@ class HealthcareVectorDB:
                 return False
 
             vector = embeddings[0].tolist()
+            doc_id = document["document_id"]  # Use only document_id
             
-            self.table.add([{
+            print(f"Storing document with ID: {doc_id}")
+            
+            data = {
                 "vector": vector,
-                "document_id": document["metadata"]["doc_id"],
+                "document_id": doc_id,
                 "patient_id": document["metadata"]["patient_id"],
                 "doc_type": document["metadata"]["doc_type"],
                 "content": document["content"],
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(),  # Changed to datetime object
                 "status": document["metadata"].get("status", "created"),
                 "envelope_id": document["metadata"].get("envelope_id", ""),
                 "signature_status": document["metadata"].get("signature_status", "pending")
-            }])
+            }
+            
+            print(f"Data fields to store: {list(data.keys())}")
+            self.table.add([data])
             return True
+            
         except Exception as e:
             print(f"Storage error: {str(e)}")
             return False
 
     def retrieve_documents(self, query: str, k: int = 5) -> List[Dict]:
+        """Retrieve documents with improved query handling"""
         try:
+            # Handle ID-based queries differently
+            if "doc_id:" in query or "document_id:" in query:
+                doc_id = query.split(":", 1)[1].strip()
+                print(f"Searching for document ID: {doc_id}")
+                
+                # Use LanceDB's where clause to search by document_id
+                results = self.table.search().where(f"document_id = '{doc_id}'").limit(1).to_pandas()
+                
+                print(f"Found documents: {len(results)}")
+                if not results.empty:
+                    print(f"First match: {results.iloc[0].to_dict()}")
+                    return results.to_dict("records")
+                
+                print("No matching documents found")
+                return []
+            
+            # For content-based searches, use embeddings
             query_embedding = cohere_client.generate_embeddings(query)
             if query_embedding is None:
                 return []
 
             results = self.table.search(query_embedding[0]).limit(k).to_pandas()
             return results.to_dict("records")
+            
         except Exception as e:
             print(f"Retrieval error: {str(e)}")
             return []
-        
+
     def get_insurance_comparison(self, procedures: List[str]) -> List[Dict]:
         if not procedures:
             return []
@@ -147,24 +169,35 @@ class HealthcareVectorDB:
         
     
     def update_document_status(self, doc_id: str, updates: Dict) -> bool:
-        """Update document status"""
+        """Update document status with improved error handling and logging"""
         try:
-            df = self.table.to_pandas()
-            mask = df['document_id'] == doc_id
+            # Get current data
+            print(f"Updating document {doc_id}")
+            results = self.table.search().where(f"document_id = '{doc_id}'").to_pandas()
             
-            if not mask.any():
-                print(f"Document {doc_id} not found")
+            if results.empty:
+                print(f"Document {doc_id} not found in search results")
                 return False
-                
-            # Update fields
-            for key, value in updates.items():
-                df.loc[mask, key] = value
-                
-            # Replace table contents
-            self.table.delete(where="true")  # Delete all records
-            self.table.add(df)
             
+            # Create updated row
+            updated_row = results.iloc[0].copy()
+            for key, value in updates.items():
+                print(f"Setting {key} = {value}")
+                updated_row[key] = value
+            
+            # Delete existing record
+            print("Deleting existing record...")
+            self.table.delete(where=f"document_id = '{doc_id}'")
+            
+            # Add updated record
+            print("Adding updated record...")
+            self.table.add([updated_row.to_dict()])
+            
+            print(f"Successfully updated document {doc_id}")
             return True
+            
         except Exception as e:
             print(f"Update error: {str(e)}")
+            print(f"Update attempted on columns: {list(updates.keys())}")
+            print(f"Current table schema: {self.table.schema.names}")
             return False
