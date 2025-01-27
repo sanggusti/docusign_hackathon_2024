@@ -15,6 +15,7 @@ class HealthcareVectorDB:
     def __init__(self):
         self.db = lancedb.connect(LANCEDB_PATH)
         self.table = self._initialize_table()
+        self.insurance_table = self._initialize_insurance_table()
         
     def _initialize_table(self):
         schema = pa.schema([
@@ -30,6 +31,18 @@ class HealthcareVectorDB:
             return self.db.create_table("healthcare_docs", schema=schema)
         except Exception:
             return self.db.open_table("healthcare_docs")
+
+    def _initialize_insurance_table(self):
+        schema = pa.schema([
+            pa.field("procedure", pa.string()),
+            pa.field("cost", pa.float64()),
+            pa.field("common_coverage", pa.string())
+        ])
+        
+        try:
+            return self.db.create_table("insurance_data", schema=schema)
+        except Exception:
+            return self.db.open_table("insurance_data")
 
     def store_document(self, document: Dict) -> bool:
         try:
@@ -63,3 +76,45 @@ class HealthcareVectorDB:
         except Exception as e:
             print(f"Retrieval error: {str(e)}")
             return []
+        
+    def get_insurance_comparison(self, procedures: List[str]) -> List[Dict]:
+        if not procedures:
+            return []
+            
+        try:
+            # LanceDB filtering and aggregation
+            df = self.insurance_table.to_pandas()
+            filtered_df = df[df['procedure'].isin(procedures)]
+            result = filtered_df.groupby('procedure').agg({
+                'cost': 'mean',
+                'common_coverage': lambda x: x.mode().iloc[0] if not x.empty else None
+            }).reset_index()
+            
+            result.columns = ['procedure', 'avg_cost', 'common_coverage']
+            return result.to_dict('records')
+            
+        except Exception as e:
+            print(f"Insurance comparison error: {str(e)}")
+            return []
+
+    def add_insurance_data(self, data: List[Dict]) -> bool:
+        """Helper method to add insurance data"""
+        try:
+            self.insurance_table.add(data)
+            return True
+        except Exception as e:
+            print(f"Error adding insurance data: {str(e)}")
+            return False
+        
+    
+    def update_document_status(self, doc_id:str, updates: Dict):
+        """Update document metadata with signing status"""
+        try:
+            self.table.update(
+                where=f"document_id = '{doc_id}'",
+                values=updates
+            )
+            return True
+        except Exception as e:
+            print(f"Update error: {str(e)}")
+            return False
