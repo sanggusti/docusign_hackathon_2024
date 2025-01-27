@@ -1,6 +1,7 @@
 # cohere_utils.py
 import cohere
 import json
+import re
 import numpy as np
 from typing import List, Dict, Union, Optional
 from config import COHERE_API_KEY
@@ -18,15 +19,16 @@ class HealthcareCohereClient:
         self.tools = self._setup_healthcare_tools()
 
     def _setup_healthcare_tools(self) -> List[dict]:
-        """Define healthcare-specific tools for document generation"""
+        """Define healthcare-specific tools for document generation."""
+        # Each tool must have top-level "name", "description", and "parameters".
         return [
             {
                 "name": "extract_patient_info",
                 "description": "Extract structured patient information from raw text",
-                "parameter_definitions": {
+                "parameters": {
                     "raw_text": {
-                        "type": "str",
                         "description": "Unstructured text containing patient information",
+                        "type": "string",
                         "required": True
                     }
                 }
@@ -34,15 +36,15 @@ class HealthcareCohereClient:
             {
                 "name": "generate_insurance_approval",
                 "description": "Generate insurance approval documentation",
-                "parameter_definitions": {
+                "parameters": {
                     "insurance_provider": {
-                        "type": "str",
                         "description": "Name of insurance provider",
+                        "type": "string",
                         "required": True
                     },
                     "procedures": {
-                        "type": "list",
-                        "description": "List of medical procedures requiring approval",
+                        "description": "List of procedures requiring approval",
+                        "type": "array",
                         "required": True
                     }
                 }
@@ -52,10 +54,10 @@ class HealthcareCohereClient:
     def generate_document(self, prompt: str, max_steps: int = 3) -> dict:
         """Generate healthcare document using tool-enabled Cohere model"""
         try:
-            # Initial API call
             response = self.client.chat(
                 model="command-r-plus",
                 message=prompt,
+                force_single_step=False,
                 tools=self.tools,
                 temperature=0.3
             )
@@ -64,17 +66,15 @@ class HealthcareCohereClient:
             step_count = 0
 
             while response.tool_calls and step_count < max_steps:
-                # Process tool calls
                 for tool_call in response.tool_calls:
                     try:
+                        params = json.loads(tool_call.parameters)
                         if tool_call.name == "extract_patient_info":
-                            output = self._handle_patient_info(
-                                tool_call.parameters['raw_text']
-                            )
+                            output = self._handle_patient_info(params['raw_text'])
                         elif tool_call.name == "generate_insurance_approval":
                             output = self._handle_insurance_approval(
-                                tool_call.parameters['insurance_provider'],
-                                tool_call.parameters['procedures']
+                                params['insurance_provider'],
+                                params['procedures']
                             )
                         else:
                             continue
@@ -83,11 +83,10 @@ class HealthcareCohereClient:
                             "call": tool_call,
                             "outputs": [output]
                         })
-                    except KeyError as e:
-                        print(f"Missing parameter in tool call: {str(e)}")
+                    except (KeyError, json.JSONDecodeError) as e:
+                        print(f"Error processing tool call: {str(e)}")
                         continue
 
-                # Subsequent API call with tool results
                 response = self.client.chat(
                     model="command-r-plus",
                     message="",
@@ -141,19 +140,39 @@ class HealthcareCohereClient:
         }
 
     def _format_final_response(self, response_text: str) -> dict:
-        """Format and validate final response"""
+        """Format and validate final response with robust JSON extraction"""
         try:
-            # Attempt to parse JSON if present
-            cleaned_text = response_text.strip().replace('```json', '').replace('```', '')
+            # Clean markdown and non-breaking spaces
+            cleaned = re.sub(r'```(?:json)?\s*', '', response_text, flags=re.DOTALL)
+            cleaned = cleaned.replace('\xa0', ' ').strip()
+            
+            # Attempt to find JSON structure
+            json_str = None
+            try:
+                # Try parsing entire response
+                return {
+                    "success": True,
+                    "content": json.loads(cleaned),
+                    "raw_text": response_text
+                }
+            except json.JSONDecodeError:
+                # Try extracting JSON substring
+                match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+                if match:
+                    json_str = match.group(0)
+                    return {
+                        "success": True,
+                        "content": json.loads(json_str),
+                        "raw_text": response_text
+                    }
+                else:
+                    raise
+                    
+        except Exception as e:
+            print(f"JSON parsing failed: {str(e)}")
             return {
                 "success": True,
-                "content": json.loads(cleaned_text),
-                "raw_text": response_text
-            }
-        except json.JSONDecodeError:
-            return {
-                "success": True,
-                "content": response_text,
+                "content": cleaned,
                 "warning": "Response contained non-JSON content"
             }
 
