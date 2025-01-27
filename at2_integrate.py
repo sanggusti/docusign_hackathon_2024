@@ -90,16 +90,12 @@ def clean_json_content(content: str) -> str:
         return json.dumps(json_obj, indent=2)
     except:
         return content
+    
 
 def format_medical_record(cohere_response: dict) -> str:
     """Convert Cohere response to formatted text with robust type handling"""
     try:
-        # Extract content with safety checks
-        content = None
-        if isinstance(cohere_response, dict):
-            content = cohere_response.get('content', cohere_response)
-        else:
-            content = cohere_response
+        content = cohere_response.get('content', cohere_response) if isinstance(cohere_response, dict) else cohere_response
 
         # Normalize content to list of records
         records = []
@@ -127,24 +123,46 @@ def format_medical_record(cohere_response: dict) -> str:
             sections.append("\nPatient Information\n------------------")
             patient_info = record.get("patient_information", {})
             if isinstance(patient_info, dict):
-                sections.extend([
-                    f"Name: {patient_info.get('name', 'N/A')}",
-                    f"ID: {patient_info.get('id', 'N/A')}"
-                ])
+                name = patient_info.get('name', 'N/A')
+                patient_id = patient_info.get('id', 'N/A')
+                sections.extend([f"Name: {name}", f"ID: {patient_id}"])
             else:
                 sections.append(f"Patient Info: {str(patient_info)}")
 
-            # Medical History
+            # Medical History (FIXED KEYS HERE)
             sections.append("\nMedical History\n--------------")
             medical_history = record.get("medical_history", [])
-            # ... similar type checks for other sections ...
+            if isinstance(medical_history, list):
+                for entry in medical_history:
+                    if isinstance(entry, dict):
+                        condition = entry.get('condition', 'N/A')
+                        date = entry.get('date', 'N/A')
+                        treatment = entry.get('treatment', 'N/A')
+                        sections.append(f"- {date}: {condition} - {treatment}")
+                    else:
+                        sections.append(f"- {str(entry)}")
+            else:
+                sections.append(f"Medical History: {str(medical_history)}")
+
+            # Current Condition
+            sections.append("\nCurrent Condition\n----------------")
+            current_condition = record.get("current_condition", "N/A")
+            sections.append(str(current_condition))
+
+            # Recommendations
+            sections.append("\nRecommendations\n--------------")
+            recommendations = record.get("recommendations", [])
+            if isinstance(recommendations, list):
+                for rec in recommendations:
+                    sections.append(f"- {rec}")
+            else:
+                sections.append(f"Recommendations: {str(recommendations)}")
 
         return "\n".join(sections)
         
     except Exception as e:
-        print(f"Formatting error: {str(e)}")
         return f"Error formatting document: {str(e)}\nRaw content: {str(cohere_response)}"
-
+    
 
 @app.route('/generate_and_sign', methods=['POST'])
 def generate_and_sign():

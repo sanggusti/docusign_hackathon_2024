@@ -16,87 +16,30 @@ class HealthcareCohereClient:
             self.client.tokenize(model="command", text="test")
         except Exception as e:
             raise ValueError(f"Failed to initialize Cohere client: {str(e)}")
-        self.tools = self._setup_healthcare_tools()
-
-    def _setup_healthcare_tools(self) -> List[dict]:
-        """Define healthcare-specific tools for document generation."""
-        # Each tool must have top-level "name", "description", and "parameters".
-        return [
-            {
-                "name": "extract_patient_info",
-                "description": "Extract structured patient information from raw text",
-                "parameters": {
-                    "raw_text": {
-                        "description": "Unstructured text containing patient information",
-                        "type": "string",
-                        "required": True
-                    }
-                }
-            },
-            {
-                "name": "generate_insurance_approval",
-                "description": "Generate insurance approval documentation",
-                "parameters": {
-                    "insurance_provider": {
-                        "description": "Name of insurance provider",
-                        "type": "string",
-                        "required": True
-                    },
-                    "procedures": {
-                        "description": "List of procedures requiring approval",
-                        "type": "array",
-                        "required": True
-                    }
-                }
-            }
-        ]
 
     def generate_document(self, prompt: str, max_steps: int = 3) -> dict:
-        """Generate healthcare document using tool-enabled Cohere model"""
+        """Generate healthcare document using Cohere's generate model"""
         try:
-            response = self.client.chat(
+            response = self.client.generate(
                 model="command-r-plus",
-                message=prompt,
-                force_single_step=False,
-                tools=self.tools,
-                temperature=0.3
+                prompt=prompt,
+                max_tokens=2048,  # Increased for more detailed responses
+                temperature=0.7,   # Slightly increased for more creative responses
+                stop_sequences=["\n\n\n"],  # Stop on triple newline
+                num_generations=1,
+                presence_penalty=0.2,  # Add some variety
+                frequency_penalty=0.3   # Reduce repetition
             )
 
-            tool_results = []
-            step_count = 0
+            # Extract and clean the generated text
+            generated_text = response.generations[0].text.strip()
+            print(f"Received from Cohere: {generated_text}")
 
-            while response.tool_calls and step_count < max_steps:
-                for tool_call in response.tool_calls:
-                    try:
-                        params = json.loads(tool_call.parameters)
-                        if tool_call.name == "extract_patient_info":
-                            output = self._handle_patient_info(params['raw_text'])
-                        elif tool_call.name == "generate_insurance_approval":
-                            output = self._handle_insurance_approval(
-                                params['insurance_provider'],
-                                params['procedures']
-                            )
-                        else:
-                            continue
-                        
-                        tool_results.append({
-                            "call": tool_call,
-                            "outputs": [output]
-                        })
-                    except (KeyError, json.JSONDecodeError) as e:
-                        print(f"Error processing tool call: {str(e)}")
-                        continue
-
-                response = self.client.chat(
-                    model="command-r-plus",
-                    message="",
-                    tools=self.tools,
-                    chat_history=response.chat_history,
-                    tool_results=tool_results
-                )
-                step_count += 1
-
-            return self._format_final_response(response.text)
+            return {
+                "success": True,
+                "content": generated_text,
+                "raw_text": generated_text
+            }
 
         except Exception as e:
             return self._format_error(f"Unexpected Error: {str(e)}")
@@ -146,34 +89,44 @@ class HealthcareCohereClient:
             cleaned = re.sub(r'```(?:json)?\s*', '', response_text, flags=re.DOTALL)
             cleaned = cleaned.replace('\xa0', ' ').strip()
             
-            # Attempt to find JSON structure
-            json_str = None
+            # Attempt to parse JSON with more robust handling
             try:
-                # Try parsing entire response
+                decoder = json.JSONDecoder()
+                json_content, idx = decoder.raw_decode(cleaned)
                 return {
                     "success": True,
-                    "content": json.loads(cleaned),
+                    "content": json_content,
                     "raw_text": response_text
                 }
-            except json.JSONDecodeError:
-                # Try extracting JSON substring
-                match = re.search(r'\{.*\}', cleaned, re.DOTALL)
-                if match:
-                    json_str = match.group(0)
-                    return {
-                        "success": True,
-                        "content": json.loads(json_str),
-                        "raw_text": response_text
-                    }
-                else:
-                    raise
-                    
+            except json.JSONDecodeError as e:
+                # Try to extract JSON from partial response
+                start_idx = cleaned.find('{')
+                end_idx = cleaned.rfind('}')
+                if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+                    potential_json = cleaned[start_idx:end_idx+1]
+                    try:
+                        json_content = json.loads(potential_json)
+                        return {
+                            "success": True,
+                            "content": json_content,
+                            "raw_text": response_text,
+                            "warning": "Extracted JSON from response"
+                        }
+                    except json.JSONDecodeError:
+                        pass
+                # If parsing fails, return the cleaned text
+                return {
+                    "success": True,
+                    "content": cleaned,
+                    "raw_text": response_text,
+                    "warning": "Response contained non-JSON content"
+                }
         except Exception as e:
             print(f"JSON parsing failed: {str(e)}")
             return {
-                "success": True,
-                "content": cleaned,
-                "warning": "Response contained non-JSON content"
+                "success": False,
+                "error": f"JSON parsing failed: {str(e)}",
+                "content": None
             }
 
     def _format_error(self, message: str) -> dict:

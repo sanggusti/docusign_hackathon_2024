@@ -18,19 +18,54 @@ class HealthcareVectorDB:
         self.insurance_table = self._initialize_insurance_table()
         
     def _initialize_table(self):
+        """Initialize table with complete schema"""
         schema = pa.schema([
             pa.field("vector", pa.list_(pa.float32(), 1024)),
             pa.field("document_id", pa.string()),
             pa.field("patient_id", pa.string()),
             pa.field("doc_type", pa.string()),
             pa.field("content", pa.string()),
-            pa.field("timestamp", pa.timestamp('ns'))
+            pa.field("timestamp", pa.timestamp('ns')),
+            pa.field("status", pa.string()),
+            pa.field("envelope_id", pa.string()),
+            pa.field("signature_status", pa.string())
         ])
         
         try:
-            return self.db.create_table("healthcare_docs", schema=schema)
+            # Try to open existing table
+            table = self.db.open_table("healthcare_docs")
+            
+            # If schema needs update, create new table with updated schema
+            if set(table.schema.names) != set(schema.names):
+                # Backup existing data if needed
+                existing_data = table.to_pandas()
+                
+                # Drop existing table
+                self.db.drop_table("healthcare_docs")
+                
+                # Create new table with updated schema
+                table = self.db.create_table("healthcare_docs", schema=schema)
+                
+                # Migrate existing data if any
+                if not existing_data.empty:
+                    # Add missing columns with default values
+                    for col in schema.names:
+                        if col not in existing_data.columns:
+                            if col == "status":
+                                existing_data[col] = "migrated"
+                            elif col == "envelope_id":
+                                existing_data[col] = ""
+                            elif col == "signature_status":
+                                existing_data[col] = "pending"
+                    
+                    # Add data back to table
+                    table.add(existing_data)
+                
+            return table
+            
         except Exception:
-            return self.db.open_table("healthcare_docs")
+            # Create new table if doesn't exist
+            return self.db.create_table("healthcare_docs", schema=schema)
 
     def _initialize_insurance_table(self):
         schema = pa.schema([
@@ -45,6 +80,7 @@ class HealthcareVectorDB:
             return self.db.open_table("insurance_data")
 
     def store_document(self, document: Dict) -> bool:
+        """Store document with all required fields"""
         try:
             embeddings = cohere_client.generate_embeddings(document["content"])
             if embeddings is None:
@@ -58,7 +94,10 @@ class HealthcareVectorDB:
                 "patient_id": document["metadata"]["patient_id"],
                 "doc_type": document["metadata"]["doc_type"],
                 "content": document["content"],
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "status": document["metadata"].get("status", "created"),
+                "envelope_id": document["metadata"].get("envelope_id", ""),
+                "signature_status": document["metadata"].get("signature_status", "pending")
             }])
             return True
         except Exception as e:
@@ -107,13 +146,24 @@ class HealthcareVectorDB:
             return False
         
     
-    def update_document_status(self, doc_id:str, updates: Dict):
-        """Update document metadata with signing status"""
+    def update_document_status(self, doc_id: str, updates: Dict) -> bool:
+        """Update document status"""
         try:
-            self.table.update(
-                where=f"document_id = '{doc_id}'",
-                values=updates
-            )
+            df = self.table.to_pandas()
+            mask = df['document_id'] == doc_id
+            
+            if not mask.any():
+                print(f"Document {doc_id} not found")
+                return False
+                
+            # Update fields
+            for key, value in updates.items():
+                df.loc[mask, key] = value
+                
+            # Replace table contents
+            self.table.delete(where="true")  # Delete all records
+            self.table.add(df)
+            
             return True
         except Exception as e:
             print(f"Update error: {str(e)}")
