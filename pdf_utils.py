@@ -1,98 +1,146 @@
-# import reportlab
-from io import BytesIO
-from typing import Dict
-from reportlab.lib import colors
+import io
+import re  # Add missing import
+from typing import Union, Dict
 from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle,
-    PageBreak
-)
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT, TA_CENTER
 
-# create pdf
-# init variables (doctemplate, styles, story)
-# Append lines
-# build
-# return
 class PDFGenerator:
     def __init__(self):
         self.styles = getSampleStyleSheet()
+        self._setup_styles()
+
+    def _setup_styles(self):
+        """Setup custom styles for PDF generation"""
+        # Add custom styles
+        self.styles.add(
+            ParagraphStyle(
+                name='CustomTitle',
+                parent=self.styles['Heading1'],
+                fontSize=24,
+                spaceAfter=30,
+                alignment=TA_CENTER,
+                textColor='navy'
+            )
+        )
         
-    def _create_header(self, title: str):
-        return Paragraph(f"<b>{title}</b>", self.styles["Title"])
-    
-    def _create_section(self, title: str, content):
-        elements = [
-            Paragraph(f"<b>{title}</b>", self.styles["Heading2"]),
-            Spacer(1, 12)
-        ]
+        # Add SectionHeader style
+        self.styles.add(
+            ParagraphStyle(
+                name='SectionHeader',
+                parent=self.styles['Heading2'],
+                fontSize=16,
+                spaceBefore=20,
+                spaceAfter=12,
+                textColor='navy',
+                alignment=TA_LEFT
+            )
+        )
         
-        if isinstance(content, list):
-            for item in content:
-                elements.append(Paragraph(f"• {item}", self.styles["BodyText"]))
+        self.styles.add(
+            ParagraphStyle(
+                name='CustomContent',
+                parent=self.styles['Normal'],
+                fontSize=12,
+                spaceAfter=12,
+                alignment=TA_LEFT,
+                leading=16
+            )
+        )
+
+    def generate_pdf(self, content: Union[str, Dict]) -> io.BytesIO:
+        """Generate PDF with improved formatting"""
+        try:
+            buffer = io.BytesIO()
+            doc = SimpleDocTemplate(
+                buffer, 
+                pagesize=letter,
+                rightMargin=72,
+                leftMargin=72,
+                topMargin=72,
+                bottomMargin=72
+            )
+            elements = []
+
+            # Process title and content
+            if isinstance(content, dict):
+                title = content.get('title', 'Medical Document')
+                content_text = content.get('content', '')
+                if isinstance(content_text, dict):
+                    content_text = json.dumps(content_text, indent=2)
+            else:
+                title = "Medical Document"
+                content_text = str(content)
+
+            # Add title
+            elements.append(Paragraph(title, self.styles['CustomTitle']))
+            elements.append(Spacer(1, 20))
+
+            # Process content sections
+            sections = content_text.split('\n')
+            for section in sections:
+                if section.strip():
+                    # Check if this is a header
+                    if section.startswith('##') or section.startswith('# '):
+                        header_text = section.lstrip('#').strip()
+                        elements.append(Paragraph(header_text, self.styles['SectionHeader']))
+                        elements.append(Spacer(1, 12))
+                    else:
+                        # Handle bullet points and regular text
+                        if section.strip().startswith('-'):
+                            text = '•' + section.strip()[1:]
+                        else:
+                            text = section.strip()
+                        elements.append(Paragraph(text, self.styles['CustomContent']))
+                        elements.append(Spacer(1, 8))
+
+            # Build PDF
+            doc.build(elements)
+            buffer.seek(0)
+            return buffer
+
+        except Exception as e:
+            print(f"PDF Generation error: {str(e)}")
+            # Create error PDF
+            buffer = io.BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=letter)
+            elements = [
+                Paragraph("Error Generating Document", self.styles['CustomTitle']),
+                Spacer(1, 12),
+                Paragraph(f"An error occurred: {str(e)}", self.styles['CustomContent'])
+            ]
+            doc.build(elements)
+            buffer.seek(0)
+            return buffer
+
+    def _format_content(self, content: Union[str, Dict]) -> str:
+        """Format content for PDF generation"""
+        if isinstance(content, str):
+            return content
+        elif isinstance(content, dict):
+            try:
+                # Handle nested content
+                if 'content' in content:
+                    return self._format_content(content['content'])
+                # Format dictionary as string
+                return "\n".join(f"{k}: {v}" for k, v in content.items())
+            except Exception as e:
+                return f"Error formatting content: {str(e)}"
         else:
-            elements.append(Paragraph(content, self.styles["BodyText"]))
-            
-        elements.append(Spacer(1, 24))
-        return elements
+            return str(content)
+
+if __name__ == "__main__":
+    # Test the PDF generator
+    pdf_gen = PDFGenerator()
     
-    def generate_pdf(self, document: Dict) -> BytesIO:
-        buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter)
-        elements = []
-        
-        # Document Header
-        elements.append(self._create_header(document["title"]))
-        elements.append(Spacer(1, 24))
-        
-        # Patient Information
-        elements += self._create_section(
-            "Patient Information",
-            document["content"]["patient_info"]
-        )
-        
-        # Medical Details
-        elements += self._create_section(
-            "Medical Details",
-            document["content"]["medical_details"]
-        )
-        
-        # Insurance Information
-        if "insurance" in document["content"]:
-            elements += self._create_section(
-                "Insurance Details",
-                document["content"]["insurance"]
-            )
-            
-        # Prescription Information
-        if "prescription" in document["content"]:
-            elements.append(PageBreak())
-            elements += self._create_section(
-                "Prescription",
-                document["content"]["prescription"]
-            )
-        
-        # Signature Block
-        elements.append(self._create_signature_table())
-        
-        doc.build(elements)
-        buffer.seek(0)
-        return buffer
+    # Test with string
+    test_str = "This is a test document\nWith multiple lines\nAnd some content."
+    pdf_bytes = pdf_gen.generate_pdf(test_str)
     
-    def _create_signature_table(self):
-        data = [
-            ["Provider Signature:", "__________________________"],
-            ["Date:", "__________________________"]
-        ]
-        
-        table = Table(data, colWidths=[120, 300])
-        table.setStyle(TableStyle([
-            ("FONTNAME", (0,0), (-1,-1), "Helvetica-Bold"),
-            ("FONTSIZE", (0,0), (-1,-1), 12),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 12),
-        ]))
-        return table
+    # Test with dictionary
+    test_dict = {
+        "title": "Test Document",
+        "content": "This is the content of the test document."
+    }
+    pdf_bytes = pdf_gen.generate_pdf(test_dict)

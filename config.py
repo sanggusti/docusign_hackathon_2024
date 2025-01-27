@@ -43,10 +43,6 @@ DS_CONFIG = {
 
 DS_CONFIG.update({
     "base_path": "https://demo.docusign.net/restapi",
-    "auth_server": "https://account-d.docusign.com",
-    "consent_url": "https://account-d.docusign.com/oauth/auth",
-    # Update redirect URL to point to demo docusign
-    "redirect_uri": "https://developers.docusign.com/platform/auth/consent",
     "app_url": "https://developers.docusign.com"
 })
 
@@ -54,13 +50,20 @@ DS_JWT = {
     "ds_client_id": os.getenv("DS_CLIENT_ID"),
     "ds_impersonated_user_id": os.getenv("DS_IMPERSONATED_USER_ID"),
     "private_key_file": "private.key",  # Make sure this path is correct
-    "authorization_server": "account-d.docusign.com"
+    "authorization_server": "account-d.docusign.com",
+    "oauth_host_name": "account-d.docusign.com",
+    "auth_server": "account-d.docusign.com"
 }
 
 DS_JWT.update({
-    "private_key_path": "./private.key",
-    "consent_required_scopes": ["signature", "impersonation"]
+    "consent_required_scopes": ["signature", "impersonation"],
+    "authorization_server": "https://account-d.docusign.com"
 })
+
+# Remove duplicate updates
+DS_CONFIG.pop("auth_server", None)
+DS_CONFIG.pop("redirect_uri", None)
+DS_JWT.pop("private_key_path", None)
 
 # API Keys
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
